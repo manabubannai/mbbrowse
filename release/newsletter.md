@@ -16,12 +16,7 @@
 
 ## ダウンロード
 
-- **Mado（シンプル版）** … タブ＋広告ブロック＋プライベート＋テーマ＋拡張。まずはこれで十分。
-  DL: https://github.com/manabubannai/mbbrowse/releases/download/v1.1.0/Mado.zip
-- **Mado Pro** … 上に「ブックマークバー」と「ページ内検索（⌘F）」を追加。
-  DL: https://github.com/manabubannai/mbbrowse/releases/download/v1.1.0/Mado-pro.zip
-
-迷ったら **Mado** でOKです。
+https://github.com/manabubannai/mbbrowse/releases/download/v1.1.0/Mado.zip
 
 ---
 ※ Chrome拡張対応はサブセットです（ページにJS/CSSを差し込むタイプのみ。background や chrome.* API を使う拡張は非対応）。仕組みの勉強もかねて、WebKitだけで組みました。ソースは全部GitHubに公開しています。
