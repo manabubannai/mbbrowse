@@ -1,7 +1,19 @@
-// アイコン生成: swift make-icon.swift <出力dir>
+// アイコン生成: swift make-icon.swift <出力dir> <背景hex> <文字hex> <文字>
+// 例: swift make-icon.swift . "#26282B" "#FFFFFF" 窓
 import AppKit
 
-let outDir = CommandLine.arguments[1]
+let args = CommandLine.arguments
+let outDir = args.count > 1 ? args[1] : "."
+func color(_ hex: String) -> NSColor {
+    var v: UInt64 = 0
+    Scanner(string: String(hex.dropFirst())).scanHexInt64(&v)
+    return NSColor(red: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255,
+                   blue: CGFloat(v & 0xFF) / 255, alpha: 1)
+}
+let bg = args.count > 2 ? color(args[2]) : color("#26282B")
+let fg = args.count > 3 ? color(args[3]) : color("#FFFFFF")
+let glyph = args.count > 4 ? args[4] : "窓"
+
 let base = 1024
 let image = NSImage(size: NSSize(width: base, height: base))
 image.lockFocus()
@@ -10,14 +22,12 @@ NSRect(x: 0, y: 0, width: base, height: base).fill()
 let inset: CGFloat = 100
 let rect = NSRect(x: inset, y: inset, width: CGFloat(base) - inset * 2, height: CGFloat(base) - inset * 2)
 let path = NSBezierPath(roundedRect: rect, xRadius: 185, yRadius: 185)
-let grad = NSGradient(colors: [
-    NSColor(calibratedRed: 0.98, green: 0.42, blue: 0.15, alpha: 1),
-    NSColor(calibratedRed: 0.92, green: 0.16, blue: 0.10, alpha: 1)])
-grad?.draw(in: path, angle: -90)
-let font = NSFont.systemFont(ofSize: 520)
-let s = NSAttributedString(string: "🦁", attributes: [.font: font])
+bg.setFill()
+path.fill()
+let font = NSFont(name: "Hiragino Mincho ProN W6", size: 470) ?? NSFont.systemFont(ofSize: 470)
+let s = NSAttributedString(string: glyph, attributes: [.font: font, .foregroundColor: fg])
 let ssize = s.size()
-s.draw(at: NSPoint(x: (CGFloat(base) - ssize.width) / 2, y: (CGFloat(base) - ssize.height) / 2 - 10))
+s.draw(at: NSPoint(x: (CGFloat(base) - ssize.width) / 2, y: (CGFloat(base) - ssize.height) / 2 - 20))
 image.unlockFocus()
 
 func png(_ px: Int) -> Data? {

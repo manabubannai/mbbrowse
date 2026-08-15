@@ -1,5 +1,6 @@
 #!/bin/zsh
 # 両版(v1/v2)をDeveloper ID署名+hardened runtime→公証→ステープル→zip まで
+# リリースタグ: v1.1.0 (dist/Mado.zip, dist/Mado-pro.zip)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -8,8 +9,7 @@ PROFILE="${NOTARY_PROFILE:-notary}"
 mkdir -p dist
 
 sign_notarize() {
-  local dir="$1" zipname="$2"
-  local app="$dir/mbブラウザ.app"
+  local app="$1" zipname="$2"
   echo "==> 署名: $app"
   codesign --force --deep --options runtime --timestamp \
     --sign "$IDENTITY" "$app"
@@ -25,6 +25,6 @@ sign_notarize() {
   echo "✅ 完成: $zip"
 }
 
-sign_notarize "v1-classic" "mbbrowse-v1-classic.zip"
-sign_notarize "v2-pro" "mbbrowse-v2-pro.zip"
-echo "全完了"
+sign_notarize "v1-classic/Mado.app" "Mado.zip"
+sign_notarize "v2-pro/Mado Pro.app" "Mado-pro.zip"
+echo "全完了 (タグ v1.1.0 でリリースに添付する)"

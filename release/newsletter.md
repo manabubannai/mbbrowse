@@ -1,26 +1,27 @@
-# mbブラウザ — 広告を最初から遮断する自作ブラウザ（毎日1アプリ）
+# Mado — 広告を最初から遮断するミニマル自作ブラウザ（毎日1アプリ）
 
-きょうは「Brave」の自作版をつくりました。
+きょうは、広告とトラッカーを最初からブロックする自作ブラウザです。名前は **Mado**。
 
-Braveって、広告とトラッカーを最初からブロックしてくれるブラウザです。それを、余計なものを全部そぎ落として、Macアプリとして自作しました。名前は **mbブラウザ**。
+余計なものを全部そぎ落としました。起動してもロゴも何も出ません。無地の画面とURLバーだけ。それでいて中身は本格派です。
 
 ## なにができる？
 
-- 🦁 **広告・トラッカーを標準でブロック**（ライオンのボタンでオン/オフ）
+- **広告・トラッカーを標準でブロック**（盾のボタンでオン/オフ）
 - ページが軽い・速い・追跡されない
-- プライベートウィンドウ（履歴を残さない）
-- タブ、DuckDuckGo検索
+- **ライト/ダークのテーマ切替**（システム追従もOK）
+- **Chrome拡張が使える**（content_scripts型のみ・展開済み拡張をフォルダに置くだけ）
+- プライベートウィンドウ（履歴を残さない）、タブ
 
 インストールは、zipを展開して「アプリケーション」に入れるだけ。署名+公証済みなので、そのまま開けます（macOS 14以降 / Apple Silicon）。
 
 ## ダウンロード
 
-- **v1（シンプル版）** … タブ＋広告ブロック＋プライベート。まずはこれで十分。
-  DL: https://github.com/manabubannai/mbbrowse/releases/download/v1.0.0/mbbrowse-v1-classic.zip
-- **v2（Pro版）** … v1に「ブックマークバー」と「ページ内検索（⌘F）」を追加。
-  DL: https://github.com/manabubannai/mbbrowse/releases/download/v1.0.0/mbbrowse-v2-pro.zip
+- **Mado（シンプル版）** … タブ＋広告ブロック＋プライベート＋テーマ＋拡張。まずはこれで十分。
+  DL: https://github.com/manabubannai/mbbrowse/releases/download/v1.1.0/Mado.zip
+- **Mado Pro** … 上に「ブックマークバー」と「ページ内検索（⌘F）」を追加。
+  DL: https://github.com/manabubannai/mbbrowse/releases/download/v1.1.0/Mado-pro.zip
 
-迷ったら **v1** でOKです。
+迷ったら **Mado** でOKです。
 
 ---
-※ Braveは開発元の商標で、これは非公式の自作クローンです。仕組みの勉強もかねて、WebKitだけで組みました。ソースは全部GitHubに公開しています。
+※ Chrome拡張対応はサブセットです（ページにJS/CSSを差し込むタイプのみ。background や chrome.* API を使う拡張は非対応）。仕組みの勉強もかねて、WebKitだけで組みました。ソースは全部GitHubに公開しています。

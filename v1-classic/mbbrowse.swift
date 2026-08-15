@@ -1,6 +1,6 @@
-// mbブラウザ v1 (classic) — Brave自作版
-// WKWebView ベースのプライバシー重視ミニブラウザ。Xcode不要 / 依存ゼロ。
+// Mado v1 (classic) — ミニマルな WKWebView ブラウザ。Xcode不要 / 依存ゼロ。
 // Shields = 広告・トラッカー遮断(WKContentRuleList)、プライベートウィンドウ、タブ。
+// テーマ切替(システム/ライト/ダーク)、Chrome拡張サブセット(content_scripts注入)。
 import AppKit
 import WebKit
 
@@ -34,10 +34,178 @@ enum Blocklist {
     }
 }
 
+// MARK: - テーマ
+enum ThemeMode: String, CaseIterable {
+    case system, light, dark
+    static let key = "mado.theme"
+    static var current: ThemeMode {
+        ThemeMode(rawValue: UserDefaults.standard.string(forKey: key) ?? "system") ?? .system
+    }
+    static func set(_ m: ThemeMode) {
+        UserDefaults.standard.set(m.rawValue, forKey: key)
+        apply()
+    }
+    static func apply() {
+        switch current {
+        case .system: NSApp.appearance = nil
+        case .light:  NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark:   NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
+// 実効アピアランスに応じた配色(無彩色・ミニマル)
+struct Palette {
+    let bg: NSColor        // ウィンドウ/スタート画面
+    let bar: NSColor       // ツールバー
+    let field: NSColor     // URLバー
+    let text: NSColor
+    let tabActive: NSColor
+
+    static let dark = Palette(
+        bg: NSColor(calibratedRed: 0.15, green: 0.16, blue: 0.17, alpha: 1),   // #26282B相当
+        bar: NSColor(calibratedRed: 0.19, green: 0.20, blue: 0.21, alpha: 1),
+        field: NSColor(calibratedWhite: 0.10, alpha: 1),
+        text: NSColor(calibratedWhite: 0.92, alpha: 1),
+        tabActive: NSColor(calibratedWhite: 0.34, alpha: 1))
+    static let light = Palette(
+        bg: NSColor(calibratedWhite: 0.96, alpha: 1),
+        bar: NSColor(calibratedWhite: 0.90, alpha: 1),
+        field: NSColor(calibratedWhite: 1.0, alpha: 1),
+        text: NSColor(calibratedWhite: 0.13, alpha: 1),
+        tabActive: NSColor(calibratedWhite: 0.78, alpha: 1))
+
+    static func current(for view: NSView) -> Palette {
+        let dark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return dark ? .dark : .light
+    }
+}
+
+// 実効アピアランス変化を通知するルートビュー
+final class ThemedView: NSView {
+    var onAppearanceChange: (() -> Void)?
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onAppearanceChange?()
+    }
+}
+
+// MARK: - Chrome拡張サブセット(content_scriptsのみ)
+// ~/Library/Application Support/Mado/Extensions/ に展開済み(unpacked)拡張を置くと、
+// manifest.json(v2/v3)の content_scripts(js/css・matches・run_at)を WKUserScript として注入する。
+// background/service worker・chrome.* API 本体は非対応。
+final class ExtensionManager {
+    static let shared = ExtensionManager()
+    private(set) var scripts: [WKUserScript] = []
+    private(set) var names: [String] = []
+
+    static var directory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Mado/Extensions", isDirectory: true)
+    }
+
+    func ensureDirectory() {
+        try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+    }
+
+    func reload() {
+        ensureDirectory()
+        scripts = []; names = []
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(at: Self.directory, includingPropertiesForKeys: [.isDirectoryKey]) else { return }
+        for dir in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            let manifest = dir.appendingPathComponent("manifest.json")
+            guard let data = try? Data(contentsOf: manifest),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
+            let name = (obj["name"] as? String) ?? dir.lastPathComponent
+            guard let contentScripts = obj["content_scripts"] as? [[String: Any]] else {
+                names.append("\(name)(content_scriptsなし・スキップ)"); continue
+            }
+            var injected = 0
+            for cs in contentScripts {
+                guard let matches = cs["matches"] as? [String], !matches.isEmpty else { continue }
+                let patterns = matches.compactMap { Self.regexSource(for: $0) }
+                guard !patterns.isEmpty else { continue }
+                let excludes = ((cs["exclude_matches"] as? [String]) ?? []).compactMap { Self.regexSource(for: $0) }
+
+                var css = ""
+                for f in (cs["css"] as? [String]) ?? [] {
+                    if let t = try? String(contentsOf: dir.appendingPathComponent(f), encoding: .utf8) { css += t + "\n" }
+                }
+                var js = ""
+                for f in (cs["js"] as? [String]) ?? [] {
+                    if let code = try? String(contentsOf: dir.appendingPathComponent(f), encoding: .utf8) {
+                        js += "try{\n\(code)\n}catch(e){console.error('[Mado拡張]', \(Self.jsLiteral(name)), e);}\n"
+                    }
+                }
+                guard !css.isEmpty || !js.isEmpty else { continue }
+
+                let runAt: WKUserScriptInjectionTime = (cs["run_at"] as? String) == "document_start" ? .atDocumentStart : .atDocumentEnd
+                let allFrames = (cs["all_frames"] as? Bool) ?? false
+                let src = Self.wrap(patterns: patterns, excludes: excludes, css: css, js: js)
+                scripts.append(WKUserScript(source: src, injectionTime: runAt, forMainFrameOnly: !allFrames))
+                injected += 1
+            }
+            names.append(injected > 0 ? name : "\(name)(注入対象なし)")
+        }
+    }
+
+    func apply(to ucc: WKUserContentController) {
+        scripts.forEach { ucc.addUserScript($0) }
+    }
+
+    // Chromeのmatchパターン → 正規表現ソース
+    static func regexSource(for pattern: String) -> String? {
+        if pattern == "<all_urls>" { return "^(https?|file|ftp)://" }
+        guard let r = pattern.range(of: "://") else { return nil }
+        let scheme = String(pattern[pattern.startIndex..<r.lowerBound])
+        let rest = String(pattern[r.upperBound...])
+        let host: String, path: String
+        if let i = rest.firstIndex(of: "/") {
+            host = String(rest[..<i]); path = String(rest[i...])
+        } else {
+            host = rest; path = "/*"
+        }
+        let schemeRe = scheme == "*" ? "https?" : NSRegularExpression.escapedPattern(for: scheme)
+        let hostRe: String
+        if host == "*" {
+            hostRe = "[^/]*"
+        } else if host.hasPrefix("*.") {
+            hostRe = "([^/]+\\.)?" + NSRegularExpression.escapedPattern(for: String(host.dropFirst(2)))
+        } else {
+            hostRe = NSRegularExpression.escapedPattern(for: host)
+        }
+        let pathRe = NSRegularExpression.escapedPattern(for: path).replacingOccurrences(of: "\\*", with: ".*")
+        return "^\(schemeRe)://\(hostRe)(:\\d+)?\(pathRe)$"
+    }
+
+    // Swift文字列 → JS文字列リテラル(JSONエスケープ)
+    static func jsLiteral(_ s: String) -> String {
+        guard let d = try? JSONEncoder().encode([s]), let a = String(data: d, encoding: .utf8) else { return "\"\"" }
+        return String(a.dropFirst().dropLast())
+    }
+
+    static func wrap(patterns: [String], excludes: [String], css: String, js: String) -> String {
+        let pats = patterns.map { "new RegExp(\(jsLiteral($0)))" }.joined(separator: ",")
+        let excl = excludes.map { "new RegExp(\(jsLiteral($0)))" }.joined(separator: ",")
+        return """
+        (function(){
+          var pats=[\(pats)], excl=[\(excl)], href=location.href;
+          if(!pats.some(function(p){return p.test(href);})) return;
+          if(excl.some(function(p){return p.test(href);})) return;
+          window.chrome = window.chrome || {};
+          window.chrome.runtime = window.chrome.runtime || { id: "mado", getURL: function(p){ return p; } };
+          var css=\(jsLiteral(css));
+          if(css.trim()){ var st=document.createElement('style'); st.textContent=css; (document.head||document.documentElement).appendChild(st); }
+          \(js)
+        })();
+        """
+    }
+}
+
 // MARK: - タブ
 final class Tab {
     let webView: WKWebView
-    var blockedCount = 0
     init(webView: WKWebView) { self.webView = webView }
 }
 
@@ -50,7 +218,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
     var currentIndex = 0
 
     // UI
-    let container = NSView()
+    let container = ThemedView()
     let toolbar = NSView()
     let tabBar = NSStackView()
     let backBtn = NSButton()
@@ -63,11 +231,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
     var shieldsOn = true
     var ruleList: WKContentRuleList?
 
-    // Brave風カラー
-    static let bg = NSColor(calibratedRed: 0.12, green: 0.12, blue: 0.14, alpha: 1)
-    static let bar = NSColor(calibratedRed: 0.17, green: 0.17, blue: 0.20, alpha: 1)
-    static let accent = NSColor(calibratedRed: 0.98, green: 0.29, blue: 0.15, alpha: 1) // Braveオレンジ系
-    static let text = NSColor(calibratedWhite: 0.92, alpha: 1)
+    var palette: Palette { Palette.current(for: container) }
 
     init(isPrivate: Bool) {
         self.isPrivate = isPrivate
@@ -75,16 +239,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
-        win.title = isPrivate ? "mbブラウザ — プライベート" : "mbブラウザ"
+        win.title = isPrivate ? "Mado — プライベート" : "Mado"
         win.titlebarAppearsTransparent = true
-        win.appearance = NSAppearance(named: .darkAqua)
-        win.backgroundColor = BrowserWindowController.bg
         win.center()
         super.init(window: win)
         win.delegate = self
         buildUI()
+        applyTheme()
         loadRules { [weak self] in
-            self?.addTab(url: URL(string: "https://duckduckgo.com/")!)
+            self?.addTab(url: nil)   // スタートは無地。ホームページは読み込まない
         }
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -94,10 +257,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
         guard let win = window else { return }
         container.frame = win.contentView!.bounds
         container.autoresizingMask = [.width, .height]
+        container.onAppearanceChange = { [weak self] in self?.applyTheme() }
         win.contentView = container
 
         toolbar.wantsLayer = true
-        toolbar.layer?.backgroundColor = BrowserWindowController.bar.cgColor
         container.addSubview(toolbar)
 
         tabBar.orientation = .horizontal
@@ -105,60 +268,58 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
         tabBar.alignment = .centerY
         container.addSubview(tabBar)
 
-        func mkBtn(_ title: String, _ sel: Selector) -> NSButton {
-            let b = NSButton(title: title, target: self, action: sel)
-            b.bezelStyle = .regularSquare
-            b.isBordered = false
-            b.font = NSFont.systemFont(ofSize: 16)
-            b.contentTintColor = BrowserWindowController.text
-            b.wantsLayer = true
-            return b
-        }
         backBtn.title = "‹"; backBtn.target = self; backBtn.action = #selector(goBack)
         fwdBtn.title = "›"; fwdBtn.target = self; fwdBtn.action = #selector(goForward)
         reloadBtn.title = "⟳"; reloadBtn.target = self; reloadBtn.action = #selector(reload)
         for b in [backBtn, fwdBtn, reloadBtn] {
             b.bezelStyle = .regularSquare; b.isBordered = false
             b.font = NSFont.systemFont(ofSize: 20)
-            b.contentTintColor = BrowserWindowController.text
             toolbar.addSubview(b)
         }
 
-        // Shieldsボタン(ライオン=Braveのシールド相当)
-        shieldBtn.title = "🦁"
+        // Shields(広告・トラッカー遮断)ボタン — SFシンボルの盾
+        shieldBtn.image = NSImage(systemSymbolName: "shield", accessibilityDescription: "Shields")
         shieldBtn.bezelStyle = .regularSquare; shieldBtn.isBordered = false
-        shieldBtn.font = NSFont.systemFont(ofSize: 17)
         shieldBtn.target = self; shieldBtn.action = #selector(toggleShields)
-        shieldBtn.toolTip = "Shields: 広告・トラッカー遮断のオン/オフ"
+        shieldBtn.toolTip = "広告・トラッカー遮断のオン/オフ"
         toolbar.addSubview(shieldBtn)
 
         urlField.placeholderString = "検索または URL を入力"
         urlField.font = NSFont.systemFont(ofSize: 13)
-        urlField.textColor = BrowserWindowController.text
-        urlField.backgroundColor = BrowserWindowController.bg
         urlField.wantsLayer = true
         urlField.layer?.cornerRadius = 8
         urlField.isBezeled = false
+        urlField.drawsBackground = true
         urlField.focusRingType = .none
         urlField.delegate = self
         urlField.target = self
         urlField.action = #selector(navigateFromField)
         urlField.usesSingleLineMode = true
-        let cell = urlField.cell as? NSTextFieldCell
-        cell?.usesSingleLineMode = true
+        (urlField.cell as? NSTextFieldCell)?.usesSingleLineMode = true
         toolbar.addSubview(urlField)
 
         newTabBtn.title = "＋"; newTabBtn.bezelStyle = .regularSquare; newTabBtn.isBordered = false
         newTabBtn.font = NSFont.systemFont(ofSize: 18)
-        newTabBtn.contentTintColor = BrowserWindowController.text
         newTabBtn.target = self; newTabBtn.action = #selector(newTabAction)
-        toolbar.addSubview(newTabBtn)
+        container.addSubview(newTabBtn)
 
         webHost.wantsLayer = true
-        webHost.layer?.backgroundColor = NSColor.white.cgColor
         container.addSubview(webHost)
 
         layout()
+    }
+
+    // テーマ配色を全UIへ反映
+    func applyTheme() {
+        let p = palette
+        window?.backgroundColor = p.bg
+        toolbar.layer?.backgroundColor = p.bar.cgColor
+        webHost.layer?.backgroundColor = p.bg.cgColor
+        urlField.textColor = p.text
+        urlField.backgroundColor = p.field
+        for b in [backBtn, fwdBtn, reloadBtn, newTabBtn, shieldBtn] { b.contentTintColor = p.text }
+        for tab in tabs { tab.webView.underPageBackgroundColor = p.bg }
+        refreshTabBar()
     }
 
     func layout() {
@@ -181,7 +342,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
     // MARK: ルール読み込み
     func loadRules(_ done: @escaping () -> Void) {
         WKContentRuleListStore.default().compileContentRuleList(
-            forIdentifier: "mbbrowse-shields", encodedContentRuleList: Blocklist.json()
+            forIdentifier: "mado-shields", encodedContentRuleList: Blocklist.json()
         ) { [weak self] list, err in
             if let err = err { NSLog("rule compile error: \(err)") }
             self?.ruleList = list
@@ -197,12 +358,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
         }
         let ucc = WKUserContentController()
         if shieldsOn, let rl = ruleList { ucc.add(rl) }
+        ExtensionManager.shared.apply(to: ucc)
         cfg.userContentController = ucc
         let wv = WKWebView(frame: webHost.bounds, configuration: cfg)
         wv.autoresizingMask = [.width, .height]
         wv.navigationDelegate = self
         wv.uiDelegate = self
         wv.allowsBackForwardNavigationGestures = true
+        wv.underPageBackgroundColor = palette.bg
         wv.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
         return wv
     }
@@ -210,6 +373,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
     @discardableResult
     func addTab(url: URL?) -> Tab {
         let tab = Tab(webView: makeWebView())
+        tab.webView.isHidden = (url == nil)   // 未読み込みのタブは無地のスタート画面
         tabs.append(tab)
         currentIndex = tabs.count - 1
         showCurrent()
@@ -223,7 +387,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
         if let wv = current?.webView {
             wv.frame = webHost.bounds
             webHost.addSubview(wv)
-            window?.makeFirstResponder(wv)
+            window?.makeFirstResponder(wv.isHidden ? urlField : wv)
             syncURLField()
         }
     }
@@ -243,6 +407,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
     }
 
     func refreshTabBar() {
+        let p = palette
         tabBar.arrangedSubviews.forEach { tabBar.removeArrangedSubview($0); $0.removeFromSuperview() }
         for (i, tab) in tabs.enumerated() {
             let title = tab.webView.title?.isEmpty == false ? tab.webView.title! : "新しいタブ"
@@ -254,8 +419,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
             btn.font = NSFont.systemFont(ofSize: 12)
             btn.wantsLayer = true
             btn.layer?.cornerRadius = 7
-            btn.layer?.backgroundColor = (i == currentIndex ? BrowserWindowController.accent.withAlphaComponent(0.85) : BrowserWindowController.bg).cgColor
-            btn.contentTintColor = BrowserWindowController.text
+            btn.layer?.backgroundColor = (i == currentIndex ? p.tabActive : p.bg).cgColor
+            btn.contentTintColor = p.text
             btn.widthAnchor.constraint(equalToConstant: 150).isActive = true
             btn.heightAnchor.constraint(equalToConstant: 28).isActive = true
             tabBar.addArrangedSubview(btn)
@@ -268,7 +433,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
     @objc func goBack() { current?.webView.goBack() }
     @objc func goForward() { current?.webView.goForward() }
     @objc func reload() { current?.webView.reload() }
-    @objc func newTabAction() { addTab(url: URL(string: "https://duckduckgo.com/")!) }
+    @objc func newTabAction() { addTab(url: nil) }
 
     @objc func toggleShields() {
         shieldsOn.toggle()
@@ -292,7 +457,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
         } else {
             url = searchURL(raw)
         }
-        if current == nil { addTab(url: url) } else { current?.webView.load(URLRequest(url: url)) }
+        if let tab = current {
+            tab.webView.isHidden = false
+            tab.webView.load(URLRequest(url: url))
+        } else {
+            addTab(url: url)
+        }
     }
 
     func searchURL(_ q: String) -> URL {
@@ -301,14 +471,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
     }
 
     func syncURLField() {
-        if let u = current?.webView.url?.absoluteString { urlField.stringValue = u }
+        urlField.stringValue = current?.webView.url?.absoluteString ?? ""
     }
 
     // MARK: WKNavigationDelegate
     func webView(_ wv: WKWebView, didFinish nav: WKNavigation!) {
+        wv.isHidden = false
         syncURLField(); refreshTabBar()
     }
-    func webView(_ wv: WKWebView, didCommit nav: WKNavigation!) { syncURLField() }
+    func webView(_ wv: WKWebView, didCommit nav: WKNavigation!) {
+        wv.isHidden = false
+        syncURLField()
+    }
 
     // 新規ウィンドウ要求(target=_blank)は新タブで開く
     func webView(_ wv: WKWebView, createWebViewWith cfg: WKWebViewConfiguration,
@@ -321,8 +495,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNav
 // MARK: - App
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var windows: [BrowserWindowController] = []
+    var themeItems: [ThemeMode: NSMenuItem] = [:]
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        ThemeMode.apply()
+        ExtensionManager.shared.reload()
         setupMenu()
         openWindow(isPrivate: false)
         NSApp.activate(ignoringOtherApps: true)
@@ -348,13 +525,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             (NSApp.keyWindow?.windowController as? BrowserWindowController)?.urlField)
     }
 
+    // テーマ
+    @objc func themeSystem() { setTheme(.system) }
+    @objc func themeLight() { setTheme(.light) }
+    @objc func themeDark() { setTheme(.dark) }
+    func setTheme(_ m: ThemeMode) {
+        ThemeMode.set(m)
+        updateThemeMenu()
+        for wc in windows { wc.applyTheme() }
+    }
+    func updateThemeMenu() {
+        for (mode, item) in themeItems { item.state = (mode == ThemeMode.current) ? .on : .off }
+    }
+
+    // 拡張機能
+    @objc func openExtensionsFolder() {
+        ExtensionManager.shared.ensureDirectory()
+        NSWorkspace.shared.open(ExtensionManager.directory)
+    }
+    @objc func reloadExtensions() {
+        ExtensionManager.shared.reload()
+        for wc in windows {
+            for tab in wc.tabs {
+                let ucc = tab.webView.configuration.userContentController
+                ucc.removeAllUserScripts()
+                ExtensionManager.shared.apply(to: ucc)
+            }
+        }
+        let alert = NSAlert()
+        alert.messageText = "拡張機能を再読み込みしました"
+        let names = ExtensionManager.shared.names
+        alert.informativeText = names.isEmpty
+            ? "拡張機能は見つかりませんでした。フォルダに展開済み(unpacked)のChrome拡張を置いてください。"
+            : names.joined(separator: "\n") + "\n\n次のページ読み込みから適用されます。"
+        alert.runModal()
+    }
+
     func setupMenu() {
         let main = NSMenu()
         let appItem = NSMenuItem(); main.addItem(appItem)
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "mbブラウザについて", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Madoについて", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "mbブラウザを終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Madoを終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
 
         let fileItem = NSMenuItem(); main.addItem(fileItem)
@@ -378,6 +591,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "すべてを選択", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(withTitle: "URLバーへ移動", action: #selector(focusURL), keyEquivalent: "l")
         editItem.submenu = editMenu
+
+        // 表示(テーマ)
+        let viewItem = NSMenuItem(); main.addItem(viewItem)
+        let viewMenu = NSMenu(title: "表示")
+        let themeSub = NSMenu(title: "テーマ")
+        let sysItem = NSMenuItem(title: "システムに合わせる", action: #selector(themeSystem), keyEquivalent: "")
+        let lightItem = NSMenuItem(title: "ライト", action: #selector(themeLight), keyEquivalent: "")
+        let darkItem = NSMenuItem(title: "ダーク", action: #selector(themeDark), keyEquivalent: "")
+        themeItems = [.system: sysItem, .light: lightItem, .dark: darkItem]
+        for i in [sysItem, lightItem, darkItem] { themeSub.addItem(i) }
+        let themeItem = NSMenuItem(title: "テーマ", action: nil, keyEquivalent: "")
+        themeItem.submenu = themeSub
+        viewMenu.addItem(themeItem)
+        viewItem.submenu = viewMenu
+        updateThemeMenu()
+
+        // 拡張機能
+        let extItem = NSMenuItem(); main.addItem(extItem)
+        let extMenu = NSMenu(title: "拡張機能")
+        extMenu.addItem(withTitle: "拡張機能フォルダを開く", action: #selector(openExtensionsFolder), keyEquivalent: "")
+        extMenu.addItem(withTitle: "拡張機能を再読み込み", action: #selector(reloadExtensions), keyEquivalent: "")
+        extItem.submenu = extMenu
 
         NSApp.mainMenu = main
     }
