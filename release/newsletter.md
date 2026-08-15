@@ -11,12 +11,13 @@
 - **ライト/ダークのテーマ切替**（システム追従もOK）
 - **Chrome拡張が使える**（content_scripts型のみ・展開済み拡張をフォルダに置くだけ）
 - プライベートウィンドウ（履歴を残さない）、タブ
+- 不具合を見つけたら、ヘルプメニューの「バグを報告」からワンクリックでメールできます
 
 インストールは、zipを展開して「アプリケーション」に入れるだけ。署名+公証済みなので、そのまま開けます（macOS 14以降 / Apple Silicon）。
 
 ## ダウンロード
 
-https://github.com/manabubannai/mbbrowse/releases/download/v1.1.0/Mado.zip
+https://github.com/manabubannai/mbbrowse/releases/download/v1.1.1/Mado.zip
 
 ---
 ※ Chrome拡張対応はサブセットです（ページにJS/CSSを差し込むタイプのみ。background や chrome.* API を使う拡張は非対応）。仕組みの勉強もかねて、WebKitだけで組みました。ソースは全部GitHubに公開しています。

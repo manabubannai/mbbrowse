@@ -1,6 +1,6 @@
 #!/bin/zsh
-# 両版(v1/v2)をDeveloper ID署名+hardened runtime→公証→ステープル→zip まで
-# リリースタグ: v1.1.0 (dist/Mado.zip, dist/Mado-pro.zip)
+# Mado(v1)をDeveloper ID署名+hardened runtime→公証→ステープル→zip まで
+# リリースタグ: v1.1.1 (dist/Mado.zip) ※配布は無印1版のみ(Pro廃止)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -26,5 +26,4 @@ sign_notarize() {
 }
 
 sign_notarize "v1-classic/Mado.app" "Mado.zip"
-sign_notarize "v2-pro/Mado Pro.app" "Mado-pro.zip"
-echo "全完了 (タグ v1.1.0 でリリースに添付する)"
+echo "全完了 (タグ v1.1.1 でリリースに添付する)"

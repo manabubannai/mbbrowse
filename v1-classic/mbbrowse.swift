@@ -538,6 +538,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for (mode, item) in themeItems { item.state = (mode == ThemeMode.current) ? .on : .off }
     }
 
+    // バグ報告
+    var bugReportWindow: NSWindow?
+
+    static var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+    }
+
+    @objc func showBugReport() {
+        if let w = bugReportWindow {
+            w.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let width: CGFloat = 420
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 170))
+
+        let desc = NSTextField(wrappingLabelWithString:
+            "Madoの不具合や気になる点があれば、メールでお知らせください。いただいた内容は今後の改善に使わせていただきます。")
+        desc.frame = NSRect(x: 20, y: 108, width: width - 40, height: 48)
+        desc.font = .systemFont(ofSize: 13)
+        content.addSubview(desc)
+
+        let button = NSButton(title: "メールでバグを報告", target: self, action: #selector(sendBugReportMail))
+        button.bezelStyle = .rounded
+        button.keyEquivalent = "\r"
+        button.sizeToFit()
+        button.frame.origin = NSPoint(x: 20, y: 62)
+        content.addSubview(button)
+
+        let note = NSTextField(labelWithString: "メールが開かない場合は manablog.ai@gmail.com へ直接お送りください")
+        note.frame = NSRect(x: 20, y: 22, width: width - 40, height: 18)
+        note.font = .systemFont(ofSize: 11)
+        note.textColor = .secondaryLabelColor
+        note.isSelectable = true
+        content.addSubview(note)
+
+        let w = NSWindow(contentRect: content.frame,
+                         styleMask: [.titled, .closable],
+                         backing: .buffered, defer: false)
+        w.title = "バグを報告"
+        w.contentView = content
+        w.isReleasedWhenClosed = false
+        w.center()
+        bugReportWindow = w
+        w.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc func sendBugReportMail() {
+        let v = AppDelegate.appVersion
+        let body = """
+        ■ どんな不具合ですか？
+        （ここに書いてください）
+
+        ■ 直前に何をしましたか？（再現手順）
+        （ここに書いてください）
+
+        ---
+        アプリ: Mado v\(v)
+        macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)
+        """
+        var comps = URLComponents()
+        comps.scheme = "mailto"
+        comps.path = "manablog.ai@gmail.com"
+        comps.queryItems = [
+            URLQueryItem(name: "subject", value: "【バグ報告】Mado v\(v)"),
+            URLQueryItem(name: "body", value: body),
+        ]
+        if let url = comps.url {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     // 拡張機能
     @objc func openExtensionsFolder() {
         ExtensionManager.shared.ensureDirectory()
@@ -613,6 +686,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         extMenu.addItem(withTitle: "拡張機能フォルダを開く", action: #selector(openExtensionsFolder), keyEquivalent: "")
         extMenu.addItem(withTitle: "拡張機能を再読み込み", action: #selector(reloadExtensions), keyEquivalent: "")
         extItem.submenu = extMenu
+
+        // ヘルプ(バグ報告)
+        let helpItem = NSMenuItem(); main.addItem(helpItem)
+        let helpMenu = NSMenu(title: "ヘルプ")
+        helpMenu.addItem(withTitle: "バグを報告…", action: #selector(showBugReport), keyEquivalent: "")
+        helpItem.submenu = helpMenu
+        NSApp.helpMenu = helpMenu
 
         NSApp.mainMenu = main
     }
