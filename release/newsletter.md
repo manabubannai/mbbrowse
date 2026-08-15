@@ -16,9 +16,9 @@ Braveって、広告とトラッカーを最初からブロックしてくれる
 ## ダウンロード
 
 - **v1（シンプル版）** … タブ＋広告ブロック＋プライベート。まずはこれで十分。
-  DL: (v1のDLリンク)
+  DL: https://github.com/manabubannai/mbbrowse/releases/download/v1.0.0/mbbrowse-v1-classic.zip
 - **v2（Pro版）** … v1に「ブックマークバー」と「ページ内検索（⌘F）」を追加。
-  DL: (v2のDLリンク)
+  DL: https://github.com/manabubannai/mbbrowse/releases/download/v1.0.0/mbbrowse-v2-pro.zip
 
 迷ったら **v1** でOKです。
 
